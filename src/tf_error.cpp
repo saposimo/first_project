@@ -47,20 +47,11 @@ public:
   }
 
 private:
-  builtin_interfaces::msg::Time toBuiltinTime(const rclcpp::Time & time) const
-  {
-    builtin_interfaces::msg::Time stamp;
-    const int64_t nanoseconds = time.nanoseconds();
-    stamp.sec = static_cast<int32_t>(nanoseconds / 1000000000LL);
-    stamp.nanosec = static_cast<uint32_t>(nanoseconds % 1000000000LL);
-    return stamp;
-  }
-
-  void resetMetrics(const rclcpp::Time & now)
+  void resetMetrics(const rclcpp::Time & stamp)
   {
     first_call_ = true;
-    start_time_ = now;
-    last_eval_time_ = now;
+    start_time_ = stamp;
+    last_eval_time_ = stamp;
     travelled_distance_ = 0.0f;
     prev_x_ = 0.0;
     prev_y_ = 0.0;
@@ -69,27 +60,35 @@ private:
 
   void timerCallback()
   {
-    const rclcpp::Time now = this->get_clock()->now();
+    geometry_msgs::msg::TransformStamped latest_gt, latest_our, t_gt, t_our;
+    rclcpp::Time eval_stamp(0, 0, RCL_ROS_TIME);
 
-    if (now.nanoseconds() == 0) {
-      return;
-    }
-
-    if (last_eval_time_.nanoseconds() != 0 && now < last_eval_time_) {
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Detected jump back in time. Resetting TF error metrics.");
-      resetMetrics(now);
-    }
-
-    last_eval_time_ = now;
-
-    geometry_msgs::msg::TransformStamped t_gt, t_our;
-
-    // Prova a leggere entrambi i TF (ultima disponibile)
     try {
-      t_gt  = tf_buffer_->lookupTransform("odom", "base_link",  tf2::TimePointZero);
-      t_our = tf_buffer_->lookupTransform("odom", "base_link2", tf2::TimePointZero);
+      latest_gt = tf_buffer_->lookupTransform("odom", "base_link", tf2::TimePointZero);
+      latest_our = tf_buffer_->lookupTransform("odom", "base_link2", tf2::TimePointZero);
+
+      const rclcpp::Time gt_stamp(latest_gt.header.stamp);
+      const rclcpp::Time our_stamp(latest_our.header.stamp);
+      eval_stamp = gt_stamp <= our_stamp ? gt_stamp : our_stamp;
+
+      if (eval_stamp.nanoseconds() == 0) {
+        return;
+      }
+
+      if (last_eval_time_.nanoseconds() != 0) {
+        if (eval_stamp < last_eval_time_) {
+          RCLCPP_WARN(
+            this->get_logger(),
+            "Detected jump back in bag time. Resetting TF error metrics.");
+          resetMetrics(eval_stamp);
+        } else if (eval_stamp == last_eval_time_) {
+          return;
+        }
+      }
+
+      t_gt = tf_buffer_->lookupTransform("odom", "base_link", eval_stamp);
+      t_our = tf_buffer_->lookupTransform("odom", "base_link2", eval_stamp);
+      last_eval_time_ = eval_stamp;
     } catch (const tf2::TransformException & ex) {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
@@ -99,7 +98,7 @@ private:
 
     // Inizializza il tempo di partenza al primo match valido
     if (first_call_) {
-      start_time_ = now;
+      start_time_ = eval_stamp;
       first_call_ = false;
     }
 
@@ -123,11 +122,11 @@ private:
 
     // ── Tempo dall'avvio ───────────────────────────────────────────────────
     const int32_t time_from_start =
-      static_cast<int32_t>((now - start_time_).seconds());
+      static_cast<int32_t>((eval_stamp - start_time_).seconds());
 
     // ── Pubblica messaggio custom ──────────────────────────────────────────
     first_project::msg::TfErrorMsg out;
-    out.header.stamp        = toBuiltinTime(now);
+    out.header.stamp        = t_our.header.stamp;
     out.header.frame_id     = "odom";
     out.tf_error            = tf_error;
     out.time_from_start     = time_from_start;

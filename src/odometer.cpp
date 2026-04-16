@@ -24,7 +24,7 @@ public:
   : Node("odometer"),
     x_(0.0), y_(0.0), theta_(0.0),
     first_msg_(true),
-    last_time_(0, 0, RCL_ROS_TIME)
+    last_stamp_(0, 0, RCL_ROS_TIME)
   {
     // Sottoscrizione ai dati del robot
     sub_ = this->create_subscription<bunker_msgs::msg::BunkerStatus>(
@@ -64,6 +64,8 @@ private:
       return msg_time;
     }
 
+    // When replaying the provided bag, /bunker_status has an empty header.stamp.
+    // With use_sim_time enabled, now() follows /clock and stays aligned to the bag.
     return this->get_clock()->now();
   }
 
@@ -73,54 +75,55 @@ private:
     y_ = 0.0;
     theta_ = 0.0;
     first_msg_ = true;
-    last_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   }
 
   // ── Callback dati robot ───────────────────────────────────────────────────
   void statusCallback(const bunker_msgs::msg::BunkerStatus::SharedPtr msg)
   {
-    const rclcpp::Time sample_time = resolveSampleTime(msg->header.stamp);
+    const rclcpp::Time msg_stamp(msg->header.stamp);
+    const rclcpp::Time current_stamp = resolveSampleTime(msg->header.stamp);
 
-    if (sample_time.nanoseconds() == 0) {
+    if (current_stamp.nanoseconds() == 0) {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
         "Waiting for a valid timestamp from /bunker_status or /clock.");
       return;
     }
 
+    if (msg_stamp.nanoseconds() == 0) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 5000,
+        "Using /clock as timestamp because /bunker_status.header.stamp is empty.");
+    }
+
     if (first_msg_) {
-      last_time_ = sample_time;
+      last_stamp_ = current_stamp;
       first_msg_ = false;
       return;
     }
 
-    // Calcola dt
-    const double dt = (sample_time - last_time_).seconds();
+    const double dt = (current_stamp - last_stamp_).seconds();
 
-    if (dt < 0.0) {
-      resetOdometryState();
-      last_time_ = sample_time;
-      first_msg_ = false;
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Detected jump back in time. Resetting odometry integration.");
-      return;
-    }
-
-    // Salta campioni duplicati; segnala solo pause anomale.
-    if (dt == 0.0) {
+    if (dt <= 0.0) {
+      last_stamp_ = current_stamp;
+      if (dt < 0.0) {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 2000,
+          "Skipping /bunker_status sample with non-increasing dt=%.3f s.", dt);
+      }
       return;
     }
 
     if (dt > 1.0) {
-      last_time_ = sample_time;
+      last_stamp_ = current_stamp;
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
         "Skipping /bunker_status sample with invalid dt=%.3f s.", dt);
       return;
     }
 
-    last_time_ = sample_time;
+    last_stamp_ = current_stamp;
 
     const double v = msg->linear_velocity;   // [m/s]
     const double w = msg->angular_velocity;  // [rad/s]
@@ -144,7 +147,7 @@ private:
 
     // ── Pubblica nav_msgs/Odometry ─────────────────────────────────────────
     nav_msgs::msg::Odometry odom_msg;
-    odom_msg.header.stamp    = toBuiltinTime(sample_time);
+    odom_msg.header.stamp    = toBuiltinTime(current_stamp);
     odom_msg.header.frame_id = "odom";
     odom_msg.child_frame_id  = "base_link2";
 
@@ -163,7 +166,7 @@ private:
 
     // ── Pubblica TF  odom → base_link2 ────────────────────────────────────
     geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.stamp    = toBuiltinTime(sample_time);
+    tf_msg.header.stamp    = toBuiltinTime(current_stamp);
     tf_msg.header.frame_id = "odom";
     tf_msg.child_frame_id  = "base_link2";
 
@@ -195,7 +198,7 @@ private:
 
   double x_, y_, theta_;
   bool   first_msg_;
-  rclcpp::Time last_time_;
+  rclcpp::Time last_stamp_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
