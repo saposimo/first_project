@@ -128,14 +128,14 @@ private:
     const double v = msg->linear_velocity;   // [m/s]
     const double w = msg->angular_velocity;  // [rad/s]
 
-    // ── Integrazione odometria con metodo di Eulero ────────────────────────
-    // Per un robot con cingoli (skid-steering) la cinematica è:
-    //   x    += v * cos(θ) * dt
-    //   y    += v * sin(θ) * dt
-    //   theta += ω * dt
-    x_     += v * std::cos(theta_) * dt;
-    y_     += v * std::sin(theta_) * dt;
-    theta_ += w * dt;
+    // ── Integrazione odometria con heading a metà passo ────────────────────
+    // Usa theta a metà intervallo per ridurre l'errore rispetto a Euler esplicito.
+    const double delta_theta = w * dt;
+    const double theta_mid = theta_ + 0.5 * delta_theta;
+
+    x_     += v * std::cos(theta_mid) * dt;
+    y_     += v * std::sin(theta_mid) * dt;
+    theta_ += delta_theta;
 
     // Normalizza theta in [-π, π]
     while (theta_ >  M_PI) theta_ -= 2.0 * M_PI;
