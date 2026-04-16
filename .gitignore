@@ -3,3 +3,6 @@
 *.swp
 *.bag
 *.db3
+__pycache__/
+*.pyc
+*.code-workspace
