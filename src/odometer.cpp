@@ -1,4 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
@@ -22,7 +23,8 @@ public:
   Odometer()
   : Node("odometer"),
     x_(0.0), y_(0.0), theta_(0.0),
-    first_msg_(true)
+    first_msg_(true),
+    last_time_(0, 0, RCL_ROS_TIME)
   {
     // Sottoscrizione ai dati del robot
     sub_ = this->create_subscription<bunker_msgs::msg::BunkerStatus>(
@@ -45,23 +47,80 @@ public:
   }
 
 private:
+  builtin_interfaces::msg::Time toBuiltinTime(const rclcpp::Time & time) const
+  {
+    builtin_interfaces::msg::Time stamp;
+    const int64_t nanoseconds = time.nanoseconds();
+    stamp.sec = static_cast<int32_t>(nanoseconds / 1000000000LL);
+    stamp.nanosec = static_cast<uint32_t>(nanoseconds % 1000000000LL);
+    return stamp;
+  }
+
+  rclcpp::Time resolveSampleTime(const builtin_interfaces::msg::Time & stamp)
+  {
+    const rclcpp::Time msg_time(stamp);
+
+    if (msg_time.nanoseconds() != 0) {
+      return msg_time;
+    }
+
+    return this->get_clock()->now();
+  }
+
+  void resetOdometryState()
+  {
+    x_ = 0.0;
+    y_ = 0.0;
+    theta_ = 0.0;
+    first_msg_ = true;
+    last_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+
   // ── Callback dati robot ───────────────────────────────────────────────────
   void statusCallback(const bunker_msgs::msg::BunkerStatus::SharedPtr msg)
   {
+    const rclcpp::Time sample_time = resolveSampleTime(msg->header.stamp);
+
+    if (sample_time.nanoseconds() == 0) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Waiting for a valid timestamp from /bunker_status or /clock.");
+      return;
+    }
+
     if (first_msg_) {
-      last_time_ = msg->header.stamp;
+      last_time_ = sample_time;
       first_msg_ = false;
       return;
     }
 
     // Calcola dt
-    double dt = (rclcpp::Time(msg->header.stamp) - rclcpp::Time(last_time_)).seconds();
-    last_time_ = msg->header.stamp;
+    const double dt = (sample_time - last_time_).seconds();
 
-    // Scarta dt nulli o anomali (es. bag loop o msg fuori ordine)
-    if (dt <= 0.0 || dt > 1.0) {
+    if (dt < 0.0) {
+      resetOdometryState();
+      last_time_ = sample_time;
+      first_msg_ = false;
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Detected jump back in time. Resetting odometry integration.");
       return;
     }
+
+    // Salta campioni duplicati; segnala solo pause anomale.
+    if (dt == 0.0) {
+      return;
+    }
+
+    if (dt > 1.0) {
+      last_time_ = sample_time;
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Skipping /bunker_status sample with invalid dt=%.3f s.", dt);
+      return;
+    }
+
+    last_time_ = sample_time;
 
     const double v = msg->linear_velocity;   // [m/s]
     const double w = msg->angular_velocity;  // [rad/s]
@@ -85,7 +144,7 @@ private:
 
     // ── Pubblica nav_msgs/Odometry ─────────────────────────────────────────
     nav_msgs::msg::Odometry odom_msg;
-    odom_msg.header.stamp    = msg->header.stamp;
+    odom_msg.header.stamp    = toBuiltinTime(sample_time);
     odom_msg.header.frame_id = "odom";
     odom_msg.child_frame_id  = "base_link2";
 
@@ -104,7 +163,7 @@ private:
 
     // ── Pubblica TF  odom → base_link2 ────────────────────────────────────
     geometry_msgs::msg::TransformStamped tf_msg;
-    tf_msg.header.stamp    = msg->header.stamp;
+    tf_msg.header.stamp    = toBuiltinTime(sample_time);
     tf_msg.header.frame_id = "odom";
     tf_msg.child_frame_id  = "base_link2";
 
@@ -124,10 +183,7 @@ private:
     const std::shared_ptr<std_srvs::srv::Empty::Request>,
     const std::shared_ptr<std_srvs::srv::Empty::Response>)
   {
-    x_         = 0.0;
-    y_         = 0.0;
-    theta_     = 0.0;
-    first_msg_ = true;
+    resetOdometryState();
     RCLCPP_INFO(this->get_logger(), "Odometry reset to zero.");
   }
 
@@ -139,7 +195,7 @@ private:
 
   double x_, y_, theta_;
   bool   first_msg_;
-  builtin_interfaces::msg::Time last_time_;
+  rclcpp::Time last_time_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

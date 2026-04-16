@@ -26,6 +26,7 @@ public:
   : Node("tf_error"),
     first_call_(true),
     start_time_(0, 0, RCL_ROS_TIME),
+    last_eval_time_(0, 0, RCL_ROS_TIME),
     travelled_distance_(0.0f),
     prev_x_(0.0), prev_y_(0.0),
     first_pose_(true)
@@ -46,8 +47,43 @@ public:
   }
 
 private:
+  builtin_interfaces::msg::Time toBuiltinTime(const rclcpp::Time & time) const
+  {
+    builtin_interfaces::msg::Time stamp;
+    const int64_t nanoseconds = time.nanoseconds();
+    stamp.sec = static_cast<int32_t>(nanoseconds / 1000000000LL);
+    stamp.nanosec = static_cast<uint32_t>(nanoseconds % 1000000000LL);
+    return stamp;
+  }
+
+  void resetMetrics(const rclcpp::Time & now)
+  {
+    first_call_ = true;
+    start_time_ = now;
+    last_eval_time_ = now;
+    travelled_distance_ = 0.0f;
+    prev_x_ = 0.0;
+    prev_y_ = 0.0;
+    first_pose_ = true;
+  }
+
   void timerCallback()
   {
+    const rclcpp::Time now = this->get_clock()->now();
+
+    if (now.nanoseconds() == 0) {
+      return;
+    }
+
+    if (last_eval_time_.nanoseconds() != 0 && now < last_eval_time_) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Detected jump back in time. Resetting TF error metrics.");
+      resetMetrics(now);
+    }
+
+    last_eval_time_ = now;
+
     geometry_msgs::msg::TransformStamped t_gt, t_our;
 
     // Prova a leggere entrambi i TF (ultima disponibile)
@@ -55,13 +91,15 @@ private:
       t_gt  = tf_buffer_->lookupTransform("odom", "base_link",  tf2::TimePointZero);
       t_our = tf_buffer_->lookupTransform("odom", "base_link2", tf2::TimePointZero);
     } catch (const tf2::TransformException & ex) {
-      // Ancora non disponibili — silenzioso durante il warm-up
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Waiting for TF odom->base_link and odom->base_link2: %s", ex.what());
       return;
     }
 
     // Inizializza il tempo di partenza al primo match valido
     if (first_call_) {
-      start_time_ = this->get_clock()->now();
+      start_time_ = now;
       first_call_ = false;
     }
 
@@ -85,11 +123,11 @@ private:
 
     // ── Tempo dall'avvio ───────────────────────────────────────────────────
     const int32_t time_from_start =
-      static_cast<int32_t>((this->get_clock()->now() - start_time_).seconds());
+      static_cast<int32_t>((now - start_time_).seconds());
 
     // ── Pubblica messaggio custom ──────────────────────────────────────────
     first_project::msg::TfErrorMsg out;
-    out.header.stamp        = this->get_clock()->now();
+    out.header.stamp        = toBuiltinTime(now);
     out.header.frame_id     = "odom";
     out.tf_error            = tf_error;
     out.time_from_start     = time_from_start;
@@ -106,6 +144,7 @@ private:
 
   bool            first_call_;
   rclcpp::Time    start_time_;
+  rclcpp::Time    last_eval_time_;
   float           travelled_distance_;
   double          prev_x_, prev_y_;
   bool            first_pose_;
