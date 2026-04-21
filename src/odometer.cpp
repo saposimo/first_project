@@ -8,6 +8,10 @@
 #include <bunker_msgs/msg/bunker_status.hpp>
 #include <std_srvs/srv/empty.hpp>
 #include <cmath>
+#include <tf2/utils.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2/exceptions.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Nodo: odometer
@@ -25,6 +29,7 @@ public:
   : Node("odometer"),
     x_(0.0), y_(0.0), theta_(0.0),
     first_msg_(true),
+    initial_pose_set_(false),
     last_stamp_(0, 0, RCL_ROS_TIME)
   {
     // Sottoscrizione ai dati del robot
@@ -37,6 +42,10 @@ public:
 
     // TF broadcaster
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+
+    // TF buffer/listener per leggere posizione iniziale
+    tf_buffer_=std::make_shared<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_=std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     // Servizio reset
     reset_srv_ = this->create_service<std_srvs::srv::Empty>(
@@ -76,7 +85,47 @@ private:
     y_ = 0.0;
     theta_ = 0.0;
     first_msg_ = true;
+    initial_pose_set_=false;
     last_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+
+
+  bool initializeFromGroundTruth(const rclcpp::Time & current_stamp)
+  {
+    try
+    {
+      auto gt=tf_buffer_->lookupTransform("odom","base_link",tf2::TimePointZero);
+
+      x_=gt.transform.translation.x;
+      y_=gt.transform.translation.y;
+
+      tf2::Quaternion q(
+        gt.transform.rotation.x,
+        gt.transform.rotation.y,
+        gt.transform.rotation.z,
+        gt.transform.rotation.w);
+
+        theta_=tf2::getYaw(q);
+
+        last_stamp_=current_stamp;
+        first_msg_=false;
+        initial_pose_set_=true;
+
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Initialized odometry from bag GT: x=%.3f y=%.3f theta=%.3f",
+          x_,y_,theta_);
+
+        return true;
+    }
+    catch(const tf2::TransformException & ex)
+    {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Waiting for initial TF odom->base_link: %s", ex.what());
+      return false;
+    }
+    
   }
 
   // ── Callback dati robot ───────────────────────────────────────────────────
@@ -97,6 +146,16 @@ private:
         this->get_logger(), *this->get_clock(), 5000,
         "Using /clock as timestamp because /bunker_status.header.stamp is empty.");
     }
+
+    if(!initial_pose_set_){
+      if(!initializeFromGroundTruth(current_stamp)){
+        return;
+      }
+      return;
+    }
+
+
+
 
     if (first_msg_) {
       last_stamp_ = current_stamp;
@@ -196,9 +255,12 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr           odom_pub_;
   std::shared_ptr<tf2_ros::TransformBroadcaster>                  tf_broadcaster_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr                reset_srv_;
+  std::shared_ptr<tf2_ros::Buffer>                                tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener>                     tf_listener_;
 
   double x_, y_, theta_;
   bool   first_msg_;
+  bool initial_pose_set_;
   rclcpp::Time last_stamp_;
 };
 
