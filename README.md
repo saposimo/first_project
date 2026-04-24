@@ -175,7 +175,7 @@ Terminale 2:
 cd ~/colcon_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 bag play --clock 20 --rate 0.5 --loop ~/bags/rosbag2_2026_04_08-16_38_55
+ros2 bag play --clock 20 --rate 0.5 --loop ~/bags/rosbag2_2026_04_08-16_38_55_fixed
 ```
 
 Terminale 3 opzionale:
