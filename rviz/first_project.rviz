@@ -61,9 +61,9 @@ Visualization Manager:
         Axes Length: 0.3
         Axes Radius: 0.02
         Color: 255; 25; 0
-        Head Length: 0.1
+        Head Length: 0.2
         Head Radius: 0.06
-        Shaft Length: 0.3
+        Shaft Length: 0.6
         Shaft Radius: 0.02
         Value: Arrow
       Topic:
@@ -87,9 +87,9 @@ Visualization Manager:
         Axes Length: 0.3
         Axes Radius: 0.02
         Color: 25; 255; 0
-        Head Length: 0.1
+        Head Length: 0.2
         Head Radius: 0.06
-        Shaft Length: 0.3
+        Shaft Length: 0.6
         Shaft Radius: 0.02
         Value: Arrow
       Topic:
