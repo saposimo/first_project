@@ -1,8 +1,23 @@
-.DS_Store
-.vscode/
-*.swp
+# Colcon build artifacts — never belong in the repository
+build/
+install/
+log/
+
+# Rosbags: large binaries, distributed separately
 *.bag
 *.db3
+*.mcap
+
+# Editor and OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.code-workspace
+
+# Python
 __pycache__/
 *.pyc
-*.code-workspace
+
+# Generated compilation database
+compile_commands.json

@@ -4,7 +4,7 @@
   <name>first_project</name>
   <version>0.0.1</version>
   <description>First Robotics Project - Odometry computation from encoder data</description>
-  <maintainer email="simone81tumminello@gmail.com">simone</maintainer>
+  <maintainer email="simone81tumminello@gmail.com">Simone Tumminello</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
